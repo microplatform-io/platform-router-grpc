@@ -1,16 +1,22 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/codegangsta/negroni"
 	"github.com/microplatform-io/platform"
 	pb "github.com/microplatform-io/platform-grpc"
 	"golang.org/x/net/context"
 	"google.golang.org/grpc"
+	"io/ioutil"
 	"log"
 	"net"
+	"net/http"
 	"os"
 	"regexp"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -24,7 +30,14 @@ var (
 	rabbitRegex            = regexp.MustCompile("RABBITMQ_[0-9]_PORT_5672_TCP_(ADDR|PORT)")
 	amqpConnectionManagers []*platform.AmqpConnectionManager
 	standardRouter         platform.Router
+	serverConfig           *ServerConfig
 )
+
+type ServerConfig struct {
+	Protocol string `json:"protocol"`
+	Host     string `json:"host"`
+	Port     string `json:"port"`
+}
 
 type server struct{}
 
@@ -60,9 +73,94 @@ func main() {
 		log.Fatalf("failed to listen: %v", err)
 	}
 
+	go ListenForServer()
+
 	s := grpc.NewServer()
 	pb.RegisterRouterServer(s, &server{})
 	s.Serve(lis)
+	fmt.Println("Here")
+	os.Exit(0)
+}
+
+func writePid() {
+	if pidfile := os.Getenv("PIDFILE"); pidfile != "" {
+		ioutil.WriteFile(pidfile, []byte(strconv.Itoa(os.Getpid())), os.ModePerm)
+	}
+}
+
+func ListenForServer() {
+
+	ip, err := getMyIp()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	if port == "" {
+		port = "80"
+	}
+
+	serverConfig = &ServerConfig{
+		Protocol: "http",
+		Host:     ip,
+		Port:     port,
+	}
+
+	log.Println("We got our IP it is : ", ip)
+
+	mux := http.NewServeMux()
+	http.HandleFunc("/server", serverHandler)
+	http.HandleFunc("/", serverHandler)
+
+	n := negroni.Classic()
+	n.UseHandler(mux)
+
+	writePid()
+
+	n.Run(":8085")
+
+	fmt.Println("Go routine :(,")
+	os.Exit(0)
+}
+
+func serverHandler(rw http.ResponseWriter, req *http.Request) {
+
+	cb := req.FormValue("callback")
+	jsonBytes, _ := json.Marshal(serverConfig)
+
+	if cb == "" {
+		rw.Header().Set("Content-Type", "application/json")
+		rw.Write(jsonBytes)
+		return
+	}
+
+	rw.Header().Set("Content-Type", "application/javascript")
+	fmt.Fprintf(rw, fmt.Sprintf("%s(%s)", cb, jsonBytes))
+}
+
+func getMyIp() (string, error) {
+	urls := []string{"http://ifconfig.me/ip", "http://curlmyip.com", "http://icanhazip.com"}
+	respChan := make(chan *http.Response)
+
+	for _, url := range urls {
+		go func(url string, responseChan chan *http.Response) {
+			res, err := http.Get(url)
+			if err == nil {
+				responseChan <- res
+			}
+		}(url, respChan)
+	}
+
+	select {
+	case res := <-respChan:
+		defer res.Body.Close()
+		body, err := ioutil.ReadAll(res.Body)
+		if err != nil {
+			return "", err
+		}
+		return strings.Trim(string(body), "\n "), nil
+	case <-time.After(time.Second * 5):
+		return "", errors.New("Timed out trying to fetch ip address.")
+	}
 }
 
 func getDefaultPublisher() platform.Publisher {
