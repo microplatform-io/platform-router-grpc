@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/rand"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -68,16 +70,30 @@ func main() {
 		port = "8752"
 	}
 
+	fmt.Println("Were going to start the go routine now...")
+
+	go ListenForServer() // goes and runs the http server for the server endpoint
+
+	//below is for the actual GRPC connection
+
 	lis, err := net.Listen("tcp", fmt.Sprintf(":%s", port))
 	if err != nil {
 		log.Fatalf("failed to listen: %v", err)
 	}
 
-	go ListenForServer()
+	cert, err := tls.LoadX509KeyPair("./cert", "./key")
+	if err != nil {
+		log.Fatalf("server: loadkeys: %s", err)
+	}
+	config := &tls.Config{Certificates: []tls.Certificate{cert}}
+	config.Rand = rand.Reader
+
+	secureListener := tls.NewListener(lis, config)
 
 	s := grpc.NewServer()
+
 	pb.RegisterRouterServer(s, &server{})
-	s.Serve(lis)
+	s.Serve(secureListener)
 	fmt.Println("Here")
 	os.Exit(0)
 }
@@ -108,8 +124,8 @@ func ListenForServer() {
 	log.Println("We got our IP it is : ", ip)
 
 	mux := http.NewServeMux()
-	http.HandleFunc("/server", serverHandler)
-	http.HandleFunc("/", serverHandler)
+	mux.HandleFunc("/server", serverHandler)
+	mux.HandleFunc("/", serverHandler)
 
 	n := negroni.Classic()
 	n.UseHandler(mux)
@@ -118,7 +134,6 @@ func ListenForServer() {
 
 	n.Run(":8085")
 
-	fmt.Println("Go routine :(,")
 	os.Exit(0)
 }
 
