@@ -44,6 +44,9 @@ type ServerConfig struct {
 type server struct{}
 
 func (s *server) Route(ctx context.Context, in *pb.Request) (*pb.Request, error) {
+
+	log.Println("A Request came in like : ", in)
+
 	routedMessage, err := standardRouter.Route(&platform.RoutedMessage{
 		Method:   platform.Int32(in.Method),
 		Resource: platform.Int32(in.Resource),
@@ -70,8 +73,6 @@ func main() {
 		port = "8752"
 	}
 
-	fmt.Println("Were going to start the go routine now...")
-
 	go ListenForServer() // goes and runs the http server for the server endpoint
 
 	//below is for the actual GRPC connection
@@ -82,18 +83,20 @@ func main() {
 	}
 
 	cert, err := tls.LoadX509KeyPair("./cert", "./key")
-	if err != nil {
-		log.Fatalf("server: loadkeys: %s", err)
-	}
-	config := &tls.Config{Certificates: []tls.Certificate{cert}}
-	config.Rand = rand.Reader
+	if err == nil {
 
-	secureListener := tls.NewListener(lis, config)
+		config := &tls.Config{Certificates: []tls.Certificate{cert}}
+		config.Rand = rand.Reader
+
+		lis = tls.NewListener(lis, config)
+	}
 
 	s := grpc.NewServer()
 
+	log.Println("Server is : ", s)
+
 	pb.RegisterRouterServer(s, &server{})
-	s.Serve(secureListener)
+	s.Serve(lis)
 	fmt.Println("Here")
 	os.Exit(0)
 }
@@ -117,7 +120,7 @@ func ListenForServer() {
 
 	serverConfig = &ServerConfig{
 		Protocol: "http",
-		Host:     ip,
+		Host:     strings.Replace(ip, ".", "-", -1),
 		Port:     port,
 	}
 
