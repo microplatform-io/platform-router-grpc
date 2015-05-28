@@ -69,21 +69,22 @@ func main() {
 	subscriber := getDefaultSubscriber("router_" + hostname)
 	standardRouter = platform.NewStandardRouter(getDefaultPublisher(), subscriber)
 
+	// we default to Port 80 here
 	if port == "" {
-		port = "8752"
+		port = "8080"
 	}
 
-	go ListenForServer() // goes and runs the http server for the server endpoint
-
-	//below is for the actual GRPC connection
+	go ListenForServer()
 
 	lis, err := net.Listen("tcp", fmt.Sprintf(":%s", port))
 	if err != nil {
 		log.Fatalf("failed to listen: %v", err)
 	}
 
+	//if we have SSL CERT and KEY lets use them.
 	cert, err := tls.LoadX509KeyPair("./cert", "./key")
 	if err == nil {
+		log.Println("> err was nil for loading 509 key pair")
 
 		config := &tls.Config{Certificates: []tls.Certificate{cert}}
 		config.Rand = rand.Reader
@@ -91,13 +92,15 @@ func main() {
 		lis = tls.NewListener(lis, config)
 	}
 
+	log.Printf("certificate: %s", cert.Certificate)
+	log.Printf("key: %#v", cert.PrivateKey)
+
 	s := grpc.NewServer()
 
 	log.Println("Server is : ", s)
 
 	pb.RegisterRouterServer(s, &server{})
 	s.Serve(lis)
-	fmt.Println("Here")
 	os.Exit(0)
 }
 
@@ -114,14 +117,12 @@ func ListenForServer() {
 		log.Fatal(err)
 	}
 
-	if port == "" {
-		port = "80"
-	}
+	port = "4772"
 
 	serverConfig = &ServerConfig{
 		Protocol: "http",
-		Host:     strings.Replace(ip, ".", "-", -1),
-		Port:     port,
+		Host:     fmt.Sprintf("%s.microplatform.io", strings.Replace(ip, ".", "-", -1)),
+		Port:     port, // we just use this here because this is where it reports it
 	}
 
 	log.Println("We got our IP it is : ", ip)
@@ -135,7 +136,7 @@ func ListenForServer() {
 
 	writePid()
 
-	n.Run(":8085")
+	n.Run(":8081") //actually runs on 8081 just so we can get server information
 
 	os.Exit(0)
 }
