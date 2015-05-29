@@ -32,6 +32,7 @@ var (
 	rabbitRegex            = regexp.MustCompile("RABBITMQ_[0-9]_PORT_5672_TCP_(ADDR|PORT)")
 	amqpConnectionManagers []*platform.AmqpConnectionManager
 	standardRouter         platform.Router
+	publisher              platform.Publisher
 	serverConfig           *ServerConfig
 )
 
@@ -67,7 +68,8 @@ func (s *server) Route(ctx context.Context, in *pb.Request) (*pb.Request, error)
 func main() {
 	hostname, _ := os.Hostname()
 	subscriber := getDefaultSubscriber("router_" + hostname)
-	standardRouter = platform.NewStandardRouter(getDefaultPublisher(), subscriber)
+	publisher = getDefaultPublisher()
+	standardRouter = platform.NewStandardRouter(publisher, subscriber)
 
 	// we default to Port 80 here
 	if port == "" {
@@ -116,6 +118,7 @@ func ListenForServer() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	log.Println("We got our IP it is : ", ip)
 
 	port = "4772"
 
@@ -125,7 +128,16 @@ func ListenForServer() {
 		Port:     port, // we just use this here because this is where it reports it
 	}
 
-	log.Println("We got our IP it is : ", ip)
+	routerConfig := &platform.RouterConfig{
+		RouterType:   platform.RouterConfig_ROUTER_TYPE_GRPC.Enum(),
+		ProtocolType: platform.RouterConfig_PROTOCOL_TYPE_HTTP.Enum(),
+		Host:         platform.String(ip),
+		Port:         platform.String(port),
+	}
+	routerConfigBytes, err := platform.Marshal(routerConfig)
+	if err != nil {
+		publisher.Publish("router.online", routerConfigBytes)
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/server", serverHandler)
@@ -136,13 +148,12 @@ func ListenForServer() {
 
 	writePid()
 
-	n.Run(":8081") //actually runs on 8081 just so we can get server information
+	n.Run(":4772") //actually runs on :4772 just so we can get server information
 
 	os.Exit(0)
 }
 
 func serverHandler(rw http.ResponseWriter, req *http.Request) {
-
 	cb := req.FormValue("callback")
 	jsonBytes, _ := json.Marshal(serverConfig)
 
