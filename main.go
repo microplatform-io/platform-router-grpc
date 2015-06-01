@@ -101,18 +101,26 @@ func main() {
 
 	log.Println("Server is : ", s)
 
-	routerConfigList := &platform.RouterConfigList{
-		RouterConfigs: routerConfigs,
-	}
+	go func() {
+		pb.RegisterRouterServer(s, &server{})
+		s.Serve(lis)
+		os.Exit(0)
+	}()
 
-	routerConfigListBytes, err := platform.Marshal(routerConfigList)
-	if err != nil {
-		publisher.Publish("router.online", routerConfigListBytes)
-	}
+	done := make(chan bool)
+	time.AfterFunc(10*time.Second, func() {
 
-	pb.RegisterRouterServer(s, &server{})
-	s.Serve(lis)
-	os.Exit(0)
+		routerConfigList := &platform.RouterConfigList{
+			RouterConfigs: routerConfigs,
+		}
+
+		log.Printf("%+v", routerConfigList)
+		routerConfigListBytes, err := platform.Marshal(routerConfigList)
+		if err == nil {
+			publisher.Publish("router.online", routerConfigListBytes)
+		}
+	})
+	<-done
 }
 
 func writePid() {
@@ -137,22 +145,12 @@ func ListenForServer() {
 		Port:     grpcPort, // we just use this here because this is where it reports it
 	}
 
-	routerConfigList := &platform.RouterConfigList{
-		RouterConfigs: []*platform.RouterConfig{
-			&platform.RouterConfig{
-				RouterType:   platform.RouterConfig_ROUTER_TYPE_GRPC.Enum(),
-				ProtocolType: platform.RouterConfig_PROTOCOL_TYPE_HTTP.Enum(),
-				Host:         platform.String(ip),
-				Port:         platform.String(port),
-			},
-		},
-	}
-
-	routerConfigListBytes, err := platform.Marshal(routerConfigList)
-	if err == nil {
-		log.Println("Publishing router online msg")
-		publisher.Publish("router.online", routerConfigListBytes)
-	}
+	routerConfigs = append(routerConfigs, &platform.RouterConfig{
+		RouterType:   platform.RouterConfig_ROUTER_TYPE_GRPC.Enum(),
+		ProtocolType: platform.RouterConfig_PROTOCOL_TYPE_HTTP.Enum(),
+		Host:         platform.String(ip),
+		Port:         platform.String(port),
+	})
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/server", serverHandler)
