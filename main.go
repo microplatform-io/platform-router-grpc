@@ -232,19 +232,45 @@ func getAmqpConnectionManagers() []*platform.AmqpConnectionManager {
 
 	amqpConnectionManagers := []*platform.AmqpConnectionManager{}
 
-	count := 0
-	for _, v := range os.Environ() {
-		if rabbitRegex.MatchString(v) {
-			count++
+	rabbitMap := map[string][]string{
+		"1": []string{rabbitAddr, rabbitPort},
+	}
+
+	for _, env := range os.Environ() {
+		parts := strings.Split(env, "=")
+
+		key, value := parts[0], parts[1]
+
+		if key == "RABBITMQ_PORT_5672_TCP_ADDR" || key == "RABBITMQ_PORT_5672_TCP_PORT" {
+			continue
+		}
+
+		// We don't care about anything else but rabbit here
+		if !strings.HasPrefix(key, "RABBITMQ_PORT_") {
+			continue
+		}
+
+		keyParts := strings.Split(key, "_")
+		serviceIndex := keyParts[2]
+		servicePort := keyParts[3]
+
+		if servicePort != "5672" {
+			continue
+		}
+
+		if _, exists := rabbitMap[serviceIndex]; !exists {
+			rabbitMap[serviceIndex] = []string{"", ""}
+		}
+
+		if strings.HasSuffix(key, "ADDR") {
+			rabbitMap[serviceIndex][0] = value
+		} else {
+			rabbitMap[serviceIndex][1] = value
 		}
 	}
 
-	if count == 0 { // No match for multiple rabbitmq servers, try and use single rabbitmq environment variables
-		amqpConnectionManagers = append(amqpConnectionManagers, platform.NewAmqpConnectionManager(rabbitUser, rabbitPass, rabbitAddr+":"+rabbitPort, ""))
-	} else if count%2 == 0 { // looking for a piar or rabbitmq addr and port
-		for i := 0; i < count/2; i++ {
-			amqpConnectionManagers = append(amqpConnectionManagers, platform.NewAmqpConnectionManager(rabbitUser, rabbitPass, fmt.Sprintf("%s:%s", os.Getenv(fmt.Sprintf("RABBITMQ_%d_PORT_5672_TCP_ADDR", i+1)), os.Getenv(fmt.Sprint("RABBITMQ_%d_PORT_5672_TCP_PORT", i+1))), ""))
-		}
+	for _, rabbitEntry := range rabbitMap {
+		amqpConnectionManagers = append(amqpConnectionManagers, platform.NewAmqpConnectionManager(rabbitUser, rabbitPass, rabbitEntry[0]+":"+rabbitEntry[1], ""))
 	}
 
 	return amqpConnectionManagers
