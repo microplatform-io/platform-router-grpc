@@ -27,12 +27,15 @@ var (
 	rabbitPass = os.Getenv("RABBITMQ_PASS")
 	rabbitAddr = os.Getenv("RABBITMQ_PORT_5672_TCP_ADDR")
 	rabbitPort = os.Getenv("RABBITMQ_PORT_5672_TCP_PORT")
-	port       = os.Getenv("PORT")
+	grpcPort   = os.Getenv("GRPC_PORT")
 
 	rabbitRegex            = regexp.MustCompile("RABBITMQ_[0-9]_PORT_5672_TCP_(ADDR|PORT)")
 	amqpConnectionManagers []*platform.AmqpConnectionManager
 	standardRouter         platform.Router
+	publisher              platform.Publisher
 	serverConfig           *ServerConfig
+
+	routerConfigs = []*platform.RouterConfig{}
 )
 
 type ServerConfig struct {
@@ -44,7 +47,6 @@ type ServerConfig struct {
 type server struct{}
 
 func (s *server) Route(ctx context.Context, in *pb.Request) (*pb.Request, error) {
-
 	log.Println("A Request came in like : ", in)
 
 	routedMessage, err := standardRouter.Route(&platform.RoutedMessage{
@@ -67,23 +69,24 @@ func (s *server) Route(ctx context.Context, in *pb.Request) (*pb.Request, error)
 func main() {
 	hostname, _ := os.Hostname()
 	subscriber := getDefaultSubscriber("router_" + hostname)
-	standardRouter = platform.NewStandardRouter(getDefaultPublisher(), subscriber)
+	publisher = getDefaultPublisher()
+	standardRouter = platform.NewStandardRouter(publisher, subscriber)
 
-	if port == "" {
-		port = "8752"
+	if grpcPort == "" {
+		grpcPort = "4772"
 	}
 
-	go ListenForServer() // goes and runs the http server for the server endpoint
+	go ListenForServer()
 
-	//below is for the actual GRPC connection
-
-	lis, err := net.Listen("tcp", fmt.Sprintf(":%s", port))
+	lis, err := net.Listen("tcp", fmt.Sprintf(":%s", grpcPort))
 	if err != nil {
 		log.Fatalf("failed to listen: %v", err)
 	}
 
+	//if we have SSL CERT and KEY lets use them.
 	cert, err := tls.LoadX509KeyPair("./cert", "./key")
 	if err == nil {
+		log.Println("> err was nil for loading 509 key pair")
 
 		config := &tls.Config{Certificates: []tls.Certificate{cert}}
 		config.Rand = rand.Reader
@@ -91,14 +94,33 @@ func main() {
 		lis = tls.NewListener(lis, config)
 	}
 
+	log.Printf("certificate: %s", cert.Certificate)
+	log.Printf("key: %#v", cert.PrivateKey)
+
 	s := grpc.NewServer()
 
 	log.Println("Server is : ", s)
 
-	pb.RegisterRouterServer(s, &server{})
-	s.Serve(lis)
-	fmt.Println("Here")
-	os.Exit(0)
+	go func() {
+		pb.RegisterRouterServer(s, &server{})
+		s.Serve(lis)
+		os.Exit(0)
+	}()
+
+	done := make(chan bool)
+	time.AfterFunc(10*time.Second, func() {
+
+		routerConfigList := &platform.RouterConfigList{
+			RouterConfigs: routerConfigs,
+		}
+
+		log.Printf("%+v", routerConfigList)
+		routerConfigListBytes, err := platform.Marshal(routerConfigList)
+		if err == nil {
+			publisher.Publish("router.online", routerConfigListBytes)
+		}
+	})
+	<-done
 }
 
 func writePid() {
@@ -113,18 +135,22 @@ func ListenForServer() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	log.Println("We got our IP it is : ", ip)
 
-	if port == "" {
-		port = "80"
-	}
+	port := "4773"
 
 	serverConfig = &ServerConfig{
 		Protocol: "http",
-		Host:     strings.Replace(ip, ".", "-", -1),
-		Port:     port,
+		Host:     fmt.Sprintf("%s.microplatform.io", strings.Replace(ip, ".", "-", -1)),
+		Port:     grpcPort, // we just use this here because this is where it reports it
 	}
 
-	log.Println("We got our IP it is : ", ip)
+	routerConfigs = append(routerConfigs, &platform.RouterConfig{
+		RouterType:   platform.RouterConfig_ROUTER_TYPE_GRPC.Enum(),
+		ProtocolType: platform.RouterConfig_PROTOCOL_TYPE_HTTP.Enum(),
+		Host:         platform.String(ip),
+		Port:         platform.String(port),
+	})
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/server", serverHandler)
@@ -135,13 +161,12 @@ func ListenForServer() {
 
 	writePid()
 
-	n.Run(":8085")
+	n.Run(":4773") //actually runs on :4773 just so we can get server information
 
 	os.Exit(0)
 }
 
 func serverHandler(rw http.ResponseWriter, req *http.Request) {
-
 	cb := req.FormValue("callback")
 	jsonBytes, _ := json.Marshal(serverConfig)
 
