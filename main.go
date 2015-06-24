@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/codegangsta/negroni"
+	"github.com/JacobSquires/negroni"
 	"github.com/microplatform-io/platform"
 	pb "github.com/microplatform-io/platform-grpc"
 	"golang.org/x/net/context"
@@ -22,12 +22,18 @@ import (
 	"time"
 )
 
+const (
+	KEY  = "./key"
+	CERT = "./cert"
+)
+
 var (
 	rabbitUser = os.Getenv("RABBITMQ_USER")
 	rabbitPass = os.Getenv("RABBITMQ_PASS")
 	rabbitAddr = os.Getenv("RABBITMQ_PORT_5672_TCP_ADDR")
 	rabbitPort = os.Getenv("RABBITMQ_PORT_5672_TCP_PORT")
 	grpcPort   = os.Getenv("GRPC_PORT")
+	httpPort   = os.Getenv("HTTP_PORT")
 
 	rabbitRegex            = regexp.MustCompile("RABBITMQ_[0-9]_PORT_5672_TCP_(ADDR|PORT)")
 	amqpConnectionManagers []*platform.AmqpConnectionManager
@@ -76,6 +82,10 @@ func main() {
 		grpcPort = "4772"
 	}
 
+	if httpPort == "" {
+		httpPort = "4773"
+	}
+
 	go ListenForServer()
 
 	lis, err := net.Listen("tcp", fmt.Sprintf(":%s", grpcPort))
@@ -94,8 +104,8 @@ func main() {
 		lis = tls.NewListener(lis, config)
 	}
 
-	log.Printf("certificate: %s", cert.Certificate)
-	log.Printf("key: %#v", cert.PrivateKey)
+	//log.Printf("certificate: %s", cert.Certificate)
+	//log.Printf("key: %#v", cert.PrivateKey)
 
 	s := grpc.NewServer()
 
@@ -137,47 +147,96 @@ func ListenForServer() {
 	}
 	log.Println("We got our IP it is : ", ip)
 
-	port := "4773"
-
 	serverConfig = &ServerConfig{
 		Protocol: "http",
 		Host:     fmt.Sprintf("%s.microplatform.io", strings.Replace(ip, ".", "-", -1)),
 		Port:     grpcPort, // we just use this here because this is where it reports it
 	}
 
-	routerConfigs = append(routerConfigs, &platform.RouterConfig{
-		RouterType:   platform.RouterConfig_ROUTER_TYPE_GRPC.Enum(),
-		ProtocolType: platform.RouterConfig_PROTOCOL_TYPE_HTTP.Enum(),
-		Host:         platform.String(ip),
-		Port:         platform.String(port),
-	})
-
 	mux := http.NewServeMux()
 	mux.HandleFunc("/server", serverHandler)
 	mux.HandleFunc("/", serverHandler)
 
 	n := negroni.Classic()
+	n.Use(negroni.HandlerFunc(func(w http.ResponseWriter, r *http.Request, next http.HandlerFunc) {
+		if origin := r.Header.Get("Origin"); origin != "" {
+			w.Header().Add("Access-Control-Allow-Origin", origin)
+		} else {
+			w.Header().Add("Access-Control-Allow-Origin", "null")
+		}
+
+		w.Header().Add("Access-Control-Allow-Methods", "GET,PUT,POST,DELETE")
+		w.Header().Add("Access-Control-Allow-Headers", "Content-Type")
+		w.Header().Add("Access-Control-Allow-Credentials", "true")
+		w.Header().Add("Connection", "keep-alive")
+
+		next(w, r)
+	}))
 	n.UseHandler(mux)
 
-	writePid()
+	// check if key and cert file exist run tls server
+	if _, err = os.Stat(KEY); err == nil {
+		if _, err = os.Stat(CERT); err == nil {
+			log.Println("KEY and CERT exist, serving TLS.")
+			routerConfigs = append(routerConfigs, &platform.RouterConfig{
+				RouterType:   platform.RouterConfig_ROUTER_TYPE_GRPC.Enum(),
+				ProtocolType: platform.RouterConfig_PROTOCOL_TYPE_HTTPS.Enum(),
+				Host:         platform.String(ip),
+				Port:         platform.String(grpcPort),
+			})
 
-	n.Run(":4773") //actually runs on :4773 just so we can get server information
+			n.RunTLS(fmt.Sprintf(":%s", httpPort), CERT, KEY)
+		}
+	} else {
+		routerConfigs = append(routerConfigs, &platform.RouterConfig{
+			RouterType:   platform.RouterConfig_ROUTER_TYPE_GRPC.Enum(),
+			ProtocolType: platform.RouterConfig_PROTOCOL_TYPE_HTTP.Enum(),
+			Host:         platform.String(ip),
+			Port:         platform.String(grpcPort),
+		})
+		// runs if key and cert dont exist
+		n.Run(fmt.Sprintf(":%s", httpPort))
+	}
+
+	writePid()
 
 	os.Exit(0)
 }
 
-func serverHandler(rw http.ResponseWriter, req *http.Request) {
+func serverHandler(w http.ResponseWriter, req *http.Request) {
 	cb := req.FormValue("callback")
-	jsonBytes, _ := json.Marshal(serverConfig)
 
+	ip, err := getMyIp()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	var serverConfig *ServerConfig
+	if req.TLS != nil {
+		log.Println("Request was sent over ssl")
+		serverConfig = &ServerConfig{
+			Protocol: "https",
+			Host:     formatHostAddress(ip),
+			Port:     httpPort,
+		}
+	} else {
+		log.Println("Request was *NOT* sent over ssl")
+		serverConfig = &ServerConfig{
+			Protocol: "http",
+			Host:     formatHostAddress(ip),
+			Port:     httpPort,
+		}
+	}
+
+	jsonBytes, _ := json.Marshal(serverConfig)
 	if cb == "" {
-		rw.Header().Set("Content-Type", "application/json")
-		rw.Write(jsonBytes)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(jsonBytes)
 		return
 	}
 
-	rw.Header().Set("Content-Type", "application/javascript")
-	fmt.Fprintf(rw, fmt.Sprintf("%s(%s)", cb, jsonBytes))
+	w.Header().Set("Content-Type", "application/javascript")
+	fmt.Fprintf(w, fmt.Sprintf("%s(%s)", cb, jsonBytes))
 }
 
 func getMyIp() (string, error) {
@@ -299,4 +358,10 @@ func getAmqpConnectionManagers() []*platform.AmqpConnectionManager {
 	}
 
 	return amqpConnectionManagers
+}
+
+func formatHostAddress(ip string) string {
+	hostAddress := strings.Replace(ip, ".", "-", -1)
+
+	return fmt.Sprintf("%s.%s", hostAddress, "microplatform.io")
 }
