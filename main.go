@@ -59,7 +59,7 @@ func (s *server) Route(ctx context.Context, in *pb.Request) (*pb.Request, error)
 		Method:   platform.Int32(in.Method),
 		Resource: platform.Int32(in.Resource),
 		Body:     in.Body,
-	}, 5*time.Second)
+	}, 15*time.Second)
 	if err != nil {
 		return nil, errors.New(fmt.Sprintf("Failed to route message: %s", err))
 	}
@@ -174,26 +174,20 @@ func ListenForServer() {
 	}))
 	n.UseHandler(mux)
 
+	routerConfigs = append(routerConfigs, &platform.RouterConfig{
+		RouterType:   platform.RouterConfig_ROUTER_TYPE_GRPC.Enum(),
+		ProtocolType: platform.RouterConfig_PROTOCOL_TYPE_HTTP.Enum(),
+		Host:         platform.String(ip),
+		Port:         platform.String(grpcPort),
+	})
+
 	// check if key and cert file exist run tls server
 	if _, err = os.Stat(KEY); err == nil {
 		if _, err = os.Stat(CERT); err == nil {
-			log.Println("KEY and CERT exist, serving TLS.")
-			routerConfigs = append(routerConfigs, &platform.RouterConfig{
-				RouterType:   platform.RouterConfig_ROUTER_TYPE_GRPC.Enum(),
-				ProtocolType: platform.RouterConfig_PROTOCOL_TYPE_HTTPS.Enum(),
-				Host:         platform.String(ip),
-				Port:         platform.String(grpcPort),
-			})
-
+			log.Println("KEY and CERT exist, serving TLS HTTP ENDPOINT")
 			n.RunTLS(fmt.Sprintf(":%s", httpPort), CERT, KEY)
 		}
 	} else {
-		routerConfigs = append(routerConfigs, &platform.RouterConfig{
-			RouterType:   platform.RouterConfig_ROUTER_TYPE_GRPC.Enum(),
-			ProtocolType: platform.RouterConfig_PROTOCOL_TYPE_HTTP.Enum(),
-			Host:         platform.String(ip),
-			Port:         platform.String(grpcPort),
-		})
 		// runs if key and cert dont exist
 		n.Run(fmt.Sprintf(":%s", httpPort))
 	}
@@ -217,14 +211,14 @@ func serverHandler(w http.ResponseWriter, req *http.Request) {
 		serverConfig = &ServerConfig{
 			Protocol: "https",
 			Host:     formatHostAddress(ip),
-			Port:     httpPort,
+			Port:     grpcPort,
 		}
 	} else {
 		log.Println("Request was *NOT* sent over ssl")
 		serverConfig = &ServerConfig{
 			Protocol: "http",
 			Host:     formatHostAddress(ip),
-			Port:     httpPort,
+			Port:     grpcPort,
 		}
 	}
 
@@ -316,45 +310,19 @@ func getAmqpConnectionManagers() []*platform.AmqpConnectionManager {
 
 	amqpConnectionManagers := []*platform.AmqpConnectionManager{}
 
-	rabbitMap := map[string][]string{
-		"1": []string{rabbitAddr, rabbitPort},
-	}
-
-	for _, env := range os.Environ() {
-		parts := strings.Split(env, "=")
-
-		key, value := parts[0], parts[1]
-
-		if key == "RABBITMQ_PORT_5672_TCP_ADDR" || key == "RABBITMQ_PORT_5672_TCP_PORT" {
-			continue
-		}
-
-		// We don't care about anything else but rabbit here
-		if !strings.HasPrefix(key, "RABBITMQ_PORT_") {
-			continue
-		}
-
-		keyParts := strings.Split(key, "_")
-		serviceIndex := keyParts[2]
-		servicePort := keyParts[3]
-
-		if servicePort != "5672" {
-			continue
-		}
-
-		if _, exists := rabbitMap[serviceIndex]; !exists {
-			rabbitMap[serviceIndex] = []string{"", ""}
-		}
-
-		if strings.HasSuffix(key, "ADDR") {
-			rabbitMap[serviceIndex][0] = value
-		} else {
-			rabbitMap[serviceIndex][1] = value
+	count := 0
+	for _, v := range os.Environ() {
+		if rabbitRegex.MatchString(v) {
+			count++
 		}
 	}
 
-	for _, rabbitEntry := range rabbitMap {
-		amqpConnectionManagers = append(amqpConnectionManagers, platform.NewAmqpConnectionManager(rabbitUser, rabbitPass, rabbitEntry[0]+":"+rabbitEntry[1], ""))
+	if count == 0 { // No match for multiple rabbitmq servers, try and use single rabbitmq environment variables
+		amqpConnectionManagers = append(amqpConnectionManagers, platform.NewAmqpConnectionManager(rabbitUser, rabbitPass, rabbitAddr+":"+rabbitPort, ""))
+	} else if count%2 == 0 { // looking for a piar or rabbitmq addr and port
+		for i := 0; i < count/2; i++ {
+			amqpConnectionManagers = append(amqpConnectionManagers, platform.NewAmqpConnectionManager(rabbitUser, rabbitPass, fmt.Sprintf("%s:%s", os.Getenv(fmt.Sprintf("RABBITMQ_%d_PORT_5672_TCP_ADDR", i+1)), os.Getenv(fmt.Sprint("RABBITMQ_%d_PORT_5672_TCP_PORT", i+1))), ""))
+		}
 	}
 
 	return amqpConnectionManagers
