@@ -106,7 +106,7 @@ func (s *server) Route(routeServer pb.Router_RouteServer) error {
 	s.clients[clientUuid] = routeServer
 	s.mu.Unlock()
 
-	for i := 0; i < 1000; i++ {
+	for {
 		log.Printf("[server.Route] waiting for request from: %s", clientUuid)
 
 		routerRequest, err := routeServer.Recv()
