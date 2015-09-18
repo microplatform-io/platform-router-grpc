@@ -5,7 +5,7 @@ ENV RABBITMQ_PASS=password
 ENV RABBITMQ_PORT_5672_TCP_ADDR=127.0.0.1
 ENV RABBITMQ_PORT_5672_TCP_PORT=5672
 
-EXPOSE 8752
+EXPOSE 4772
 
 ADD . /go/src/microplatform-io/platform-router-grpc
 WORKDIR /go/src/microplatform-io/platform-router-grpc
