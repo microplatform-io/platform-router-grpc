@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"github.com/microplatform-io/platform"
 	"io/ioutil"
 	"log"
 	"os"
@@ -10,6 +9,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/microplatform-io/platform"
 )
 
 const (
@@ -38,10 +39,7 @@ func main() {
 
 	routerUri := "router-" + hostname
 
-	grpcPort := os.Getenv("GRPC_PORT")
-	if grpcPort == "" {
-		grpcPort = "4772"
-	}
+	grpcPort := platform.Getenv("GRPC_PORT", "4772")
 
 	connectionManager := platform.NewAmqpConnectionManager(rabbitUser, rabbitPass, rabbitAddr+":"+rabbitPort, "")
 	publisher = getDefaultPublisher(connectionManager)
@@ -76,7 +74,7 @@ func main() {
 
 	go func() {
 		for {
-			ListenForHttpServer(routerUri, grpcServerConfig)
+			ListenForHttpServer(routerUri, CreateServeMux(grpcServerConfig))
 		}
 	}()
 
