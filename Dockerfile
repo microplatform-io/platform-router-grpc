@@ -7,7 +7,6 @@ ENV RABBITMQ_PORT_5672_TCP_PORT=5672
 
 EXPOSE 8752
 
-# ADD platform /go/src/github.com/microplatform-io/platform
 ADD . /go/src/microplatform-io/platform-router-grpc
 WORKDIR /go/src/microplatform-io/platform-router-grpc
 RUN go get ./...
