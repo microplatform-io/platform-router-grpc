@@ -3,14 +3,15 @@ package main
 import (
 	"crypto/rand"
 	"crypto/tls"
-	"github.com/microplatform-io/platform"
-	pb "github.com/microplatform-io/platform-grpc"
-	"google.golang.org/grpc"
 	"io"
 	"log"
 	"net"
 	"net/url"
 	"sync"
+
+	"github.com/microplatform-io/platform"
+	pb "github.com/microplatform-io/platform-grpc"
+	"google.golang.org/grpc"
 )
 
 func ListenForGrpcServer(routerUri string, grpcServerConfig *ServerConfig) {
@@ -94,7 +95,7 @@ func (s *server) runResponder() {
 		}
 
 		return nil
-	}), 3)
+	}))
 
 	go s.subscriber.Run()
 }
