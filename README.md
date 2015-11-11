@@ -1,8 +1,8 @@
-# Microplatform.IO GRPC Router
+# Micro platform GRPC Router
 
 ### How to start router
 
-Certificate that is used here is just example. Should be used only for testing.
+Certificate that is used here is just example. Should be used only while testing.
 
 ```sh
 go get -u github.com/microplatform-io/platform-router-grpc
