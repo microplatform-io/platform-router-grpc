@@ -110,7 +110,7 @@ func (s *server) Route(routeServer pb.Router_RouteServer) error {
 
 					payloadBytes, err := platform.Marshal(response)
 					if err != nil {
-						log.Printf("[server.Subscriber] failed to marshal platform response: %s", err)
+						log.Printf("[server.Route] failed to marshal platform response: %s", err)
 						return
 					}
 
@@ -118,8 +118,17 @@ func (s *server) Route(routeServer pb.Router_RouteServer) error {
 						return
 					}
 
+					log.Printf("[server.Route] sending!")
+
 					if err := routeServer.Send(&pb.Request{Payload: payloadBytes}); err != nil {
-						log.Printf("[server.Subscriber] failed to send platform response: %s", err)
+						log.Printf("[server.Route] failed to send platform response: %s", err)
+						return
+					}
+
+					log.Printf("[server.Route] sent!")
+
+					if response.GetCompleted() {
+						log.Printf("[server.Route] got final response, closing down!")
 						return
 					}
 
