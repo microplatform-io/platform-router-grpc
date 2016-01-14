@@ -7,6 +7,7 @@ import (
 	"log"
 	"net"
 	"strings"
+	"time"
 
 	"github.com/kr/pretty"
 	"github.com/microplatform-io/platform"
@@ -34,6 +35,7 @@ func ListenForGrpcServer(routerUri string, grpcServerConfig *ServerConfig) {
 	s := grpc.NewServer()
 
 	router := platform.NewStandardRouter(publisher, subscriber)
+	router.SetHeartbeatTimeout(7 * time.Second)
 
 	pb.RegisterRouterServer(s, newServer(router))
 	s.Serve(tls.NewListener(lis, &tls.Config{
