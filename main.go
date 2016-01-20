@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"io/ioutil"
 	"log"
 	"os"
 	"os/signal"
@@ -11,11 +10,6 @@ import (
 	"time"
 
 	"github.com/microplatform-io/platform"
-)
-
-const (
-	SSL_CERT_FILE = "/tmp/ssl_cert"
-	SSL_KEY_FILE  = "/tmp/ssl_key"
 )
 
 var (
@@ -44,14 +38,6 @@ func main() {
 	connectionManager := platform.NewAmqpConnectionManager(rabbitUser, rabbitPass, rabbitAddr+":"+rabbitPort, "")
 	publisher = getDefaultPublisher(connectionManager)
 	subscriber = getDefaultSubscriber(connectionManager, routerUri)
-
-	if err := ioutil.WriteFile(SSL_CERT_FILE, []byte(strings.Replace(os.Getenv("SSL_CERT"), "\\n", "\n", -1)), 0755); err != nil {
-		log.Fatalf("> failed to write SSL cert file: %s", err)
-	}
-
-	if err := ioutil.WriteFile(SSL_KEY_FILE, []byte(strings.Replace(os.Getenv("SSL_KEY"), "\\n", "\n", -1)), 0755); err != nil {
-		log.Fatalf("> failed to write SSL cert file: %s", err)
-	}
 
 	ip, err := platform.GetMyIp()
 	if err != nil {

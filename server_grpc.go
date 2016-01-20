@@ -1,8 +1,6 @@
 package main
 
 import (
-	"crypto/rand"
-	"crypto/tls"
 	"io"
 	"log"
 	"net"
@@ -27,21 +25,13 @@ func ListenForGrpcServer(routerUri string, grpcServerConfig *ServerConfig) {
 		log.Fatalf("failed to listen: %v", err)
 	}
 
-	cert, err := tls.LoadX509KeyPair(SSL_CERT_FILE, SSL_KEY_FILE)
-	if err != nil {
-		log.Fatalf("> failed to load x509 key pair: %s", err)
-	}
-
 	s := grpc.NewServer()
 
 	router := platform.NewStandardRouter(publisher, subscriber)
 	router.SetHeartbeatTimeout(7 * time.Second)
 
 	pb.RegisterRouterServer(s, newServer(router))
-	s.Serve(tls.NewListener(lis, &tls.Config{
-		Certificates: []tls.Certificate{cert},
-		Rand:         rand.Reader,
-	}))
+	s.Serve(lis)
 }
 
 type server struct {
