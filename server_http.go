@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"os"
 
-	"github.com/JacobSquires/negroni"
+	"github.com/codegangsta/negroni"
 )
 
 func ListenForHttpServer(routerUri string, mux *http.ServeMux) {
@@ -39,7 +39,7 @@ func ListenForHttpServer(routerUri string, mux *http.ServeMux) {
 		httpPort = "4773"
 	}
 
-	n.RunTLS(":"+httpPort, SSL_CERT_FILE, SSL_KEY_FILE)
+	n.Run(":" + httpPort)
 }
 
 func CreateServeMux(serverConfig *ServerConfig) *http.ServeMux {
