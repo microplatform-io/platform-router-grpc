@@ -4,22 +4,17 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"os/signal"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/microplatform-io/platform"
 )
 
 var (
-	rabbitUser = os.Getenv("RABBITMQ_USER")
-	rabbitPass = os.Getenv("RABBITMQ_PASS")
-	rabbitAddr = os.Getenv("RABBITMQ_PORT_5672_TCP_ADDR")
-	rabbitPort = os.Getenv("RABBITMQ_PORT_5672_TCP_PORT")
+	rabbitmqEndpoints = strings.Split(os.Getenv("RABBITMQ_ENDPOINTS"), ",")
 
-	publisher  platform.Publisher
-	subscriber platform.Subscriber
+	GRPC_PORT = platform.Getenv("GRPC_PORT", "4772")
+	HTTP_PORT = platform.Getenv("HTTP_PORT", "4773")
 )
 
 type ServerConfig struct {
@@ -33,11 +28,20 @@ func main() {
 
 	routerUri := "router-" + hostname
 
-	grpcPort := platform.Getenv("GRPC_PORT", "4772")
+	connectionManagers := platform.NewAmqpConnectionManagersWithEndpoints(rabbitmqEndpoints)
 
-	connectionManager := platform.NewAmqpConnectionManager(rabbitUser, rabbitPass, rabbitAddr+":"+rabbitPort, "")
-	publisher = getDefaultPublisher(connectionManager)
-	subscriber = getDefaultSubscriber(connectionManager, routerUri)
+	publisher, err := platform.NewAmqpMultiPublisher(connectionManagers)
+	if err != nil {
+		log.Fatalf("> failed to create multi publisher: %s", err)
+	}
+
+	subscriber, err := platform.NewAmqpMultiSubscriber(connectionManagers, routerUri)
+	if err != nil {
+		log.Fatalf("> failed to create multi subscriber: %s", err)
+	}
+
+	router := platform.NewStandardRouter(publisher, subscriber)
+	router.SetHeartbeatTimeout(7 * time.Second)
 
 	ip, err := platform.GetMyIp()
 	if err != nil {
@@ -49,85 +53,27 @@ func main() {
 	grpcServerConfig := &ServerConfig{
 		Protocol: "https",
 		Host:     formatHostAddress(ip),
-		Port:     grpcPort, // we just use this here because this is where it reports it
+		Port:     GRPC_PORT, // we just use this here because this is where it reports it
 	}
 
 	go func() {
 		for {
-			ListenForGrpcServer(routerUri, grpcServerConfig)
+			ListenForGrpcServer(router, grpcServerConfig)
 		}
 	}()
 
 	go func() {
 		for {
-			ListenForHttpServer(routerUri, CreateServeMux(grpcServerConfig))
+			ListenForHttpServer(router, CreateServeMux(grpcServerConfig))
 		}
 	}()
-
-	manageRouterState(&platform.RouterConfigList{
-		RouterConfigs: []*platform.RouterConfig{
-			&platform.RouterConfig{
-				RouterType:   platform.RouterConfig_ROUTER_TYPE_GRPC.Enum(),
-				ProtocolType: platform.RouterConfig_PROTOCOL_TYPE_HTTP.Enum(),
-				Host:         platform.String(ip),
-				Port:         platform.String(grpcPort),
-			},
-		},
-	})
 
 	// Block indefinitely
 	<-make(chan bool)
-}
-
-func getDefaultPublisher(connectionManager *platform.AmqpConnectionManager) platform.Publisher {
-	publisher, err := platform.NewAmqpPublisher(connectionManager)
-	if err != nil {
-		log.Fatalf("Could not create publisher. %s", err)
-	}
-
-	return publisher
-}
-
-func getDefaultSubscriber(connectionManager *platform.AmqpConnectionManager, queue string) platform.Subscriber {
-	subscriber, err := platform.NewAmqpSubscriber(connectionManager, queue)
-	if err != nil {
-		log.Fatalf("Could not create subscriber. %s", err)
-	}
-
-	return subscriber
 }
 
 func formatHostAddress(ip string) string {
 	hostAddress := strings.Replace(ip, ".", "-", -1)
 
 	return fmt.Sprintf("%s.%s", hostAddress, "microplatform.io")
-}
-
-func manageRouterState(routerConfigList *platform.RouterConfigList) {
-	log.Printf("%+v", routerConfigList)
-
-	routerConfigListBytes, _ := platform.Marshal(routerConfigList)
-
-	sigc := make(chan os.Signal, 1)
-	signal.Notify(sigc, syscall.SIGHUP, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
-
-	// Emit a router offline signal if we catch an interrupt
-	go func() {
-		select {
-		case <-sigc:
-			publisher.Publish("router.offline", routerConfigListBytes)
-
-			os.Exit(0)
-		}
-	}()
-
-	// Wait for the servers to come online, and then repeat the router.online every 30 seconds
-	time.AfterFunc(10*time.Second, func() {
-		publisher.Publish("router.online", routerConfigListBytes)
-
-		for {
-			time.Sleep(30 * time.Second)
-			publisher.Publish("router.online", routerConfigListBytes)
-		}
-	})
 }

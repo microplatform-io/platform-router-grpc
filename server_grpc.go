@@ -5,7 +5,6 @@ import (
 	"log"
 	"net"
 	"strings"
-	"time"
 
 	"github.com/kr/pretty"
 	"github.com/microplatform-io/platform"
@@ -13,7 +12,7 @@ import (
 	"google.golang.org/grpc"
 )
 
-func ListenForGrpcServer(routerUri string, grpcServerConfig *ServerConfig) {
+func ListenForGrpcServer(router platform.Router, grpcServerConfig *ServerConfig) {
 	defer func() {
 		if r := recover(); r != nil {
 			log.Println("> grpc server has died: %s", r)
@@ -26,10 +25,6 @@ func ListenForGrpcServer(routerUri string, grpcServerConfig *ServerConfig) {
 	}
 
 	s := grpc.NewServer()
-
-	router := platform.NewStandardRouter(publisher, subscriber)
-	router.SetHeartbeatTimeout(7 * time.Second)
-
 	pb.RegisterRouterServer(s, newServer(router))
 	s.Serve(lis)
 }

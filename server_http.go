@@ -5,12 +5,12 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"os"
 
 	"github.com/codegangsta/negroni"
+	"github.com/microplatform-io/platform"
 )
 
-func ListenForHttpServer(routerUri string, mux *http.ServeMux) {
+func ListenForHttpServer(router platform.Router, mux *http.ServeMux) {
 	defer func() {
 		if r := recover(); r != nil {
 			log.Println("> http server has died: %s", r)
@@ -34,12 +34,7 @@ func ListenForHttpServer(routerUri string, mux *http.ServeMux) {
 	}))
 	n.UseHandler(mux)
 
-	httpPort := os.Getenv("HTTP_PORT")
-	if httpPort == "" {
-		httpPort = "4773"
-	}
-
-	n.Run(":" + httpPort)
+	n.Run(":" + HTTP_PORT)
 }
 
 func CreateServeMux(serverConfig *ServerConfig) *http.ServeMux {
