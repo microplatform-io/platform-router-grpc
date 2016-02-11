@@ -57,15 +57,11 @@ func main() {
 	}
 
 	go func() {
-		for {
-			ListenForGrpcServer(router, grpcServerConfig)
-		}
+		log.Fatalf("grpc server died: %s", ListenForGrpcServer(router, grpcServerConfig))
 	}()
 
 	go func() {
-		for {
-			ListenForHttpServer(router, CreateServeMux(grpcServerConfig))
-		}
+		log.Fatalf("http server died: %s", ListenForHttpServer(router, CreateServeMux(grpcServerConfig)))
 	}()
 
 	// Block indefinitely
