@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -10,7 +11,7 @@ import (
 	"github.com/microplatform-io/platform"
 )
 
-func ListenForHttpServer(router platform.Router, mux *http.ServeMux) {
+func ListenForHttpServer(router platform.Router, mux *http.ServeMux) error {
 	defer func() {
 		if r := recover(); r != nil {
 			log.Println("> http server has died: %s", r)
@@ -35,6 +36,8 @@ func ListenForHttpServer(router platform.Router, mux *http.ServeMux) {
 	n.UseHandler(mux)
 
 	n.Run(":" + HTTP_PORT)
+
+	return errors.New("server unexpected died")
 }
 
 func CreateServeMux(serverConfig *ServerConfig) *http.ServeMux {

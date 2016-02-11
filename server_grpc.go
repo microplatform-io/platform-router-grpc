@@ -17,7 +17,7 @@ import (
 	"google.golang.org/grpc"
 )
 
-func ListenForGrpcServer(router platform.Router, grpcServerConfig *ServerConfig) {
+func ListenForGrpcServer(router platform.Router, grpcServerConfig *ServerConfig) error {
 	defer func() {
 		if r := recover(); r != nil {
 			log.Println("> grpc server has died: %s", r)
@@ -31,7 +31,7 @@ func ListenForGrpcServer(router platform.Router, grpcServerConfig *ServerConfig)
 
 	s := grpc.NewServer()
 	pb.RegisterRouterServer(s, newServer(router))
-	s.Serve(lis)
+	return s.Serve(lis)
 }
 
 type server struct {
