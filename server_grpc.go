@@ -1,20 +1,23 @@
 package main
 
 import (
-	"crypto/rand"
-	"crypto/tls"
 	"io"
 	"log"
 	"net"
-	"net/url"
-	"sync"
+	"os"
+	"os/signal"
+	"strings"
+	"sync/atomic"
+	"syscall"
+	"time"
 
+	"github.com/kr/pretty"
 	"github.com/microplatform-io/platform"
 	pb "github.com/microplatform-io/platform-grpc"
 	"google.golang.org/grpc"
 )
 
-func ListenForGrpcServer(routerUri string, grpcServerConfig *ServerConfig) {
+func ListenForGrpcServer(router platform.Router, grpcServerConfig *ServerConfig) error {
 	defer func() {
 		if r := recover(); r != nil {
 			log.Println("> grpc server has died: %s", r)
@@ -26,158 +29,165 @@ func ListenForGrpcServer(routerUri string, grpcServerConfig *ServerConfig) {
 		log.Fatalf("failed to listen: %v", err)
 	}
 
-	cert, err := tls.LoadX509KeyPair(SSL_CERT_FILE, SSL_KEY_FILE)
-	if err != nil {
-		log.Fatalf("> failed to load x509 key pair: %s", err)
-	}
-
 	s := grpc.NewServer()
-	pb.RegisterRouterServer(s, newServer(routerUri, publisher, subscriber))
-	s.Serve(tls.NewListener(lis, &tls.Config{
-		Certificates: []tls.Certificate{cert},
-		Rand:         rand.Reader,
-	}))
+	pb.RegisterRouterServer(s, newServer(router))
+	return s.Serve(lis)
 }
 
 type server struct {
-	routerUri  string
-	publisher  platform.Publisher
-	subscriber platform.Subscriber
-	clients    map[string]pb.Router_RouteServer
-	mu         *sync.Mutex
-}
-
-func (s *server) runResponder() {
-	log.Printf("[server] subscribing to: %s", s.routerUri)
-
-	s.subscriber.Subscribe(s.routerUri, platform.ConsumerHandlerFunc(func(payload []byte) error {
-		// log.Printf("[server.Subscriber] got payload: %s", payload)
-
-		platformResponse := &platform.Request{}
-		if err := platform.Unmarshal(payload, platformResponse); err != nil {
-			log.Printf("[server.Subscriber] failed to unmarshal platform response: %s", err)
-			return err
-		}
-
-		log.Printf("[server.Subscriber] got platform response: %s", platformResponse)
-
-		lastElementIndex := len(platformResponse.Routing.RouteTo) - 1
-
-		destination := platformResponse.Routing.RouteTo[lastElementIndex]
-
-		// Append the router as the source, and remove the tail destination
-		platformResponse.Routing.RouteFrom = append(platformResponse.Routing.RouteFrom, &platform.Route{
-			Uri: platform.String(s.routerUri),
-		})
-		platformResponse.Routing.RouteTo = platformResponse.Routing.RouteTo[:lastElementIndex]
-
-		log.Printf("[server.Subscriber] searching for grpc client by uri: %s", destination.GetUri())
-
-		s.mu.Lock()
-		grpcClient, exists := s.clients[destination.GetUri()]
-		s.mu.Unlock()
-
-		if exists {
-			log.Printf("[server.Subscriber] found grpc client by uri: %s", grpcClient)
-
-			payloadBytes, err := platform.Marshal(platformResponse)
-			if err != nil {
-				log.Printf("[server.Subscriber] failed to marshal platform response: %s", err)
-				return err
-			}
-
-			if err := grpcClient.Send(&pb.Request{Payload: payloadBytes}); err != nil {
-				log.Printf("[server.Subscriber] failed to send platform response: %s", err)
-				return err
-			}
-		} else {
-			log.Printf("[server.Subscriber] failed to discover grpc client by uri: %s", destination.GetUri())
-		}
-
-		return nil
-	}))
-
-	go s.subscriber.Run()
+	router               platform.Router
+	closed               chan interface{}
+	totalPendingRequests int32
 }
 
 func (s *server) Route(routeServer pb.Router_RouteServer) error {
 	clientUuid := "client-" + platform.CreateUUID()
 
-	s.mu.Lock()
-	s.clients[clientUuid] = routeServer
-	s.mu.Unlock()
+	clientClosed := make(chan interface{})
 
 	for {
-		log.Printf("[server.Route] waiting for request from: %s", clientUuid)
+		select {
+		case <-clientClosed:
+			log.Printf("[server.Route] %s - client is closed! goodbye!", clientUuid)
 
-		routerRequest, err := routeServer.Recv()
-		if err != nil {
-			if err == io.EOF {
-				log.Println("[server.Route] client has disconnected")
-			} else {
-				log.Printf("[server.Route] client has disconnected due to unexpected error: %s", err)
+			return nil
+		case <-s.closed:
+			log.Printf("[server.Route] %s - server is closed! goodbye!", clientUuid)
+
+			return nil
+
+		default:
+			log.Printf("[server.Route] %s - waiting for request", clientUuid)
+
+			routerRequest, err := routeServer.Recv()
+			if err != nil {
+				close(clientClosed)
+
+				if err == io.EOF {
+					log.Printf("[server.Route] %s - client has disconnected", clientUuid)
+
+					return nil
+				} else {
+					log.Printf("[server.Route] %s - client has disconnected due to unexpected error: %s", clientUuid, err)
+
+					return err
+				}
 			}
 
-			s.mu.Lock()
-			delete(s.clients, clientUuid)
-			s.mu.Unlock()
+			log.Printf("[server.Route] %s -  got router request: %s", clientUuid, routerRequest)
 
-			return err
-		}
+			platformRequest := &platform.Request{}
+			if err := platform.Unmarshal(routerRequest.Payload, platformRequest); err != nil {
+				log.Printf("[server.Route] %s -  failed to unmarshal platform request: %s", clientUuid, err)
+				continue
+			}
 
-		log.Printf("[server.Route] got router request: %s", routerRequest)
+			if platformRequest.Routing == nil {
+				platformRequest.Routing = &platform.Routing{}
+			}
 
-		platformRequest := &platform.Request{}
-		if err := platform.Unmarshal(routerRequest.Payload, platformRequest); err != nil {
-			log.Printf("[server.Route] failed to unmarshal platform request: %s", err)
-			continue
-		}
+			if !platform.RouteToSchemeMatches(platformRequest, "microservice") {
+				log.Printf("[server.Route] %s -  unsupported scheme provided: %s", clientUuid, platformRequest.Routing.RouteTo)
+				continue
+			}
 
-		platformRequest.Routing.RouteFrom = []*platform.Route{
-			&platform.Route{
-				Uri: platform.String(clientUuid),
-			},
-			&platform.Route{
-				Uri: platform.String(s.routerUri),
-			},
-		}
+			platformRequest.Routing.RouteFrom = []*platform.Route{
+				&platform.Route{
+					Uri: platform.String("client://" + clientUuid),
+				},
+			}
 
-		log.Printf("[server.Route] got platform request: %s", platformRequest)
+			requestUuidPrefix := clientUuid + "::"
 
-		platformRequestPayload, err := platform.Marshal(platformRequest)
-		if err != nil {
-			log.Printf("[server.Route] failed to marshal platform request: %s", err)
-			continue
-		}
+			platformRequest.Uuid = platform.String(requestUuidPrefix + platformRequest.GetUuid())
 
-		// TODO: Introduce nil / boundary checks
-		targetUrl, err := url.Parse(platformRequest.Routing.RouteTo[0].GetUri())
-		if err != nil {
-			log.Printf("[server.Route] failed to parse the target uri: %s", err)
-			continue
-		}
+			atomic.AddInt32(&s.totalPendingRequests, 1)
 
-		log.Printf("[server.Route] parsed url: %s", targetUrl)
+			responses, timeout := s.router.Route(platformRequest)
 
-		switch targetUrl.Scheme {
-		case "microservice":
-			s.publisher.Publish(targetUrl.Path, platformRequestPayload)
+			go func() {
+				defer atomic.AddInt32(&s.totalPendingRequests, -1)
+
+				for {
+					select {
+					case <-clientClosed:
+						return
+
+					case response := <-responses:
+						log.Printf("[server.Route] %s - got a response for request: %s", clientUuid, platformRequest.GetUuid())
+						pretty.Println(response)
+
+						response.Uuid = platform.String(strings.Replace(response.GetUuid(), requestUuidPrefix, "", -1))
+
+						// Strip off the tail for routing
+						response.Routing.RouteTo = response.Routing.RouteTo[:len(response.Routing.RouteTo)-1]
+
+						payloadBytes, err := platform.Marshal(response)
+						if err != nil {
+							log.Printf("[server.Route] failed to marshal platform response: %s", err)
+							return
+						}
+
+						log.Printf("[server.Route] sending!")
+
+						if err := routeServer.Send(&pb.Request{Payload: payloadBytes}); err != nil {
+							log.Printf("[server.Route] failed to send platform response: %s", err)
+							return
+						}
+
+						log.Printf("[server.Route] sent!")
+
+						if response.GetCompleted() {
+							log.Printf("[server.Route] got final response, closing down!")
+							return
+						}
+
+					case <-timeout:
+						log.Printf("[server.Route] %s - got a timeout for request: %s", clientUuid, platformRequest.GetUuid())
+						return
+
+					}
+				}
+			}()
 		}
 	}
 
 	return nil
 }
 
-func newServer(routerUri string, publisher platform.Publisher, subscriber platform.Subscriber) *server {
-	server := &server{
-		routerUri:  routerUri,
-		publisher:  publisher,
-		subscriber: subscriber,
-		clients:    make(map[string]pb.Router_RouteServer),
-		mu:         &sync.Mutex{},
+func (s *server) monitorKillSignal() {
+	sigc := make(chan os.Signal, 1)
+	signal.Notify(sigc, syscall.SIGHUP, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
+
+	capturedSignal := <-sigc
+
+	close(s.closed)
+
+	for i := 0; i < 60; i++ {
+		totalPendingRequests := atomic.LoadInt32(&s.totalPendingRequests)
+
+		log.Printf("attempting to close server due to %s signal, total pending requests: %d", capturedSignal, totalPendingRequests)
+
+		if totalPendingRequests <= 0 {
+			os.Exit(0)
+		}
+
+		time.Sleep(time.Second * 1)
 	}
 
-	server.runResponder()
+	log.Println("failed to wait for all pending requests, %d were still remaining", atomic.LoadInt32(&s.totalPendingRequests))
+
+	os.Exit(1)
+}
+
+func newServer(router platform.Router) *server {
+	server := &server{
+		router:               router,
+		closed:               make(chan interface{}),
+		totalPendingRequests: 0,
+	}
+
+	go server.monitorKillSignal()
 
 	return server
 }
