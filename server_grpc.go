@@ -2,7 +2,6 @@ package main
 
 import (
 	"io"
-	"log"
 	"net"
 	"os"
 	"os/signal"
@@ -10,8 +9,6 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
-
-	"github.com/kr/pretty"
 	"github.com/microplatform-io/platform"
 	pb "github.com/microplatform-io/platform-grpc"
 	"google.golang.org/grpc"
@@ -20,13 +17,13 @@ import (
 func ListenForGrpcServer(router platform.Router, grpcServerConfig *ServerConfig) error {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Println("> grpc server has died: %s", r)
+			logger.Println("> grpc server has died: %s", r)
 		}
 	}()
 
 	lis, err := net.Listen("tcp", ":"+grpcServerConfig.Port)
 	if err != nil {
-		log.Fatalf("failed to listen: %v", err)
+		logger.Fatalf("failed to listen: %v", err)
 	}
 
 	s := grpc.NewServer()
@@ -48,37 +45,37 @@ func (s *server) Route(routeServer pb.Router_RouteServer) error {
 	for {
 		select {
 		case <-clientClosed:
-			log.Printf("[server.Route] %s - client is closed! goodbye!", clientUuid)
+			logger.Printf("[server.Route] %s - client is closed! goodbye!", clientUuid)
 
 			return nil
 		case <-s.closed:
-			log.Printf("[server.Route] %s - server is closed! goodbye!", clientUuid)
+			logger.Printf("[server.Route] %s - server is closed! goodbye!", clientUuid)
 
 			return nil
 
 		default:
-			log.Printf("[server.Route] %s - waiting for request", clientUuid)
+			logger.Printf("[server.Route] %s - waiting for request", clientUuid)
 
 			routerRequest, err := routeServer.Recv()
 			if err != nil {
 				close(clientClosed)
 
 				if err == io.EOF {
-					log.Printf("[server.Route] %s - client has disconnected", clientUuid)
+					logger.Printf("[server.Route] %s - client has disconnected", clientUuid)
 
 					return nil
 				} else {
-					log.Printf("[server.Route] %s - client has disconnected due to unexpected error: %s", clientUuid, err)
+					logger.Printf("[server.Route] %s - client has disconnected due to unexpected error: %s", clientUuid, err)
 
 					return err
 				}
 			}
 
-			log.Printf("[server.Route] %s -  got router request: %s", clientUuid, routerRequest)
+			logger.Printf("[server.Route] %s -  got router request: %s", clientUuid, routerRequest)
 
 			platformRequest := &platform.Request{}
 			if err := platform.Unmarshal(routerRequest.Payload, platformRequest); err != nil {
-				log.Printf("[server.Route] %s -  failed to unmarshal platform request: %s", clientUuid, err)
+				logger.Printf("[server.Route] %s -  failed to unmarshal platform request: %s", clientUuid, err)
 				continue
 			}
 
@@ -87,7 +84,7 @@ func (s *server) Route(routeServer pb.Router_RouteServer) error {
 			}
 
 			if !platform.RouteToSchemeMatches(platformRequest, "microservice") {
-				log.Printf("[server.Route] %s -  unsupported scheme provided: %s", clientUuid, platformRequest.Routing.RouteTo)
+				logger.Printf("[server.Route] %s -  unsupported scheme provided: %s", clientUuid, platformRequest.Routing.RouteTo)
 				continue
 			}
 
@@ -114,8 +111,8 @@ func (s *server) Route(routeServer pb.Router_RouteServer) error {
 						return
 
 					case response := <-responses:
-						log.Printf("[server.Route] %s - got a response for request: %s", clientUuid, platformRequest.GetUuid())
-						pretty.Println(response)
+						logger.Printf("[server.Route] %s - got a response for request: %s", clientUuid, platformRequest.GetUuid())
+						logger.PrettyPrint(response)
 
 						response.Uuid = platform.String(strings.Replace(response.GetUuid(), requestUuidPrefix, "", -1))
 
@@ -124,26 +121,26 @@ func (s *server) Route(routeServer pb.Router_RouteServer) error {
 
 						payloadBytes, err := platform.Marshal(response)
 						if err != nil {
-							log.Printf("[server.Route] failed to marshal platform response: %s", err)
+							logger.Printf("[server.pRoute] failed to marshal platform response: %s", err)
 							return
 						}
 
-						log.Printf("[server.Route] sending!")
+						logger.Printf("[server.Route] sending!")
 
 						if err := routeServer.Send(&pb.Request{Payload: payloadBytes}); err != nil {
-							log.Printf("[server.Route] failed to send platform response: %s", err)
+							logger.Printf("[server.Route] failed to send platform response: %s", err)
 							return
 						}
 
-						log.Printf("[server.Route] sent!")
+						logger.Printf("[server.Route] sent!")
 
 						if response.GetCompleted() {
-							log.Printf("[server.Route] got final response, closing down!")
+							logger.Printf("[server.Route] got final response, closing down!")
 							return
 						}
 
 					case <-timeout:
-						log.Printf("[server.Route] %s - got a timeout for request: %s", clientUuid, platformRequest.GetUuid())
+						logger.Printf("[server.Route] %s - got a timeout for request: %s", clientUuid, platformRequest.GetUuid())
 						return
 
 					}
@@ -166,7 +163,7 @@ func (s *server) monitorKillSignal() {
 	for i := 0; i < 60; i++ {
 		totalPendingRequests := atomic.LoadInt32(&s.totalPendingRequests)
 
-		log.Printf("attempting to close server due to %s signal, total pending requests: %d", capturedSignal, totalPendingRequests)
+		logger.Printf("attempting to close server due to %s signal, total pending requests: %d", capturedSignal, totalPendingRequests)
 
 		if totalPendingRequests <= 0 {
 			os.Exit(0)
@@ -175,7 +172,7 @@ func (s *server) monitorKillSignal() {
 		time.Sleep(time.Second * 1)
 	}
 
-	log.Println("failed to wait for all pending requests, %d were still remaining", atomic.LoadInt32(&s.totalPendingRequests))
+	logger.Println("failed to wait for all pending requests, %d were still remaining", atomic.LoadInt32(&s.totalPendingRequests))
 
 	os.Exit(1)
 }

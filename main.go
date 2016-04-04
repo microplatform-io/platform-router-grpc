@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"log"
 	"os"
 	"strings"
 	"time"
@@ -13,6 +12,7 @@ import (
 
 var (
 	rabbitmqEndpoints = strings.Split(os.Getenv("RABBITMQ_ENDPOINTS"), ",")
+	logger            = platform.GetLogger("platform-router-grpc")
 
 	GRPC_PORT = platform.Getenv("GRPC_PORT", "4772")
 	HTTP_PORT = platform.Getenv("HTTP_PORT", "4773")
@@ -38,12 +38,12 @@ func main() {
 
 	publisher, err := amqp.NewMultiPublisher(dialerInterfaces)
 	if err != nil {
-		log.Fatalf("> failed to create multi publisher: %s", err)
+		logger.Fatalf("> failed to create multi publisher: %s", err)
 	}
 
 	subscriber, err := amqp.NewMultiSubscriber(dialerInterfaces, routerUri)
 	if err != nil {
-		log.Fatalf("> failed to create multi subscriber: %s", err)
+		logger.Fatalf("> failed to create multi subscriber: %s", err)
 	}
 
 	router := platform.NewStandardRouter(publisher, subscriber)
@@ -51,10 +51,10 @@ func main() {
 
 	ip, err := platform.GetMyIp()
 	if err != nil {
-		log.Fatalf("> failed to get ip address: %s", err)
+		logger.Fatalf("> failed to get ip address: %s", err)
 	}
 
-	log.Println("We got our IP it is : ", ip)
+	logger.Println("We got our IP it is : ", ip)
 
 	grpcServerConfig := &ServerConfig{
 		Protocol: "https",
@@ -63,11 +63,11 @@ func main() {
 	}
 
 	go func() {
-		log.Fatalf("grpc server died: %s", ListenForGrpcServer(router, grpcServerConfig))
+		logger.Fatalf("grpc server died: %s", ListenForGrpcServer(router, grpcServerConfig))
 	}()
 
 	go func() {
-		log.Fatalf("http server died: %s", ListenForHttpServer(router, CreateServeMux(grpcServerConfig)))
+		logger.Fatalf("http server died: %s", ListenForHttpServer(router, CreateServeMux(grpcServerConfig)))
 	}()
 
 	// Block indefinitely

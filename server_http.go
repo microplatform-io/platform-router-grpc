@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"net/http"
 
 	"github.com/codegangsta/negroni"
@@ -14,7 +13,7 @@ import (
 func ListenForHttpServer(router platform.Router, mux *http.ServeMux) error {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Println("> http server has died: %s", r)
+			logger.Println("> http server has died: %s", r)
 		}
 	}()
 
