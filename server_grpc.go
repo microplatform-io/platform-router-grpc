@@ -48,81 +48,87 @@ func (s *server) Route(routeServer pb.Router_RouteServer) error {
 	shutdownNotifier := s.drainListener.NotifyShutdown()
 	defer shutdownNotifier.Shutdown()
 
-	routerRequest, err := routeServer.Recv()
-	if err != nil {
-		logger.Printf("[server.Route] %s - stream has been disconnected", streamUUID)
-
-		if err == io.EOF {
-			return nil
-		}
-
-		return err
-	}
-
-	platformRequest := &platform.Request{}
-	if err := platform.Unmarshal(routerRequest.Payload, platformRequest); err != nil {
-		logger.Printf("[server.Route] %s -  failed to unmarshal platform request: %s", streamUUID, err)
-		return err
-	}
-
-	logger.Printf("[server.Route] %s - got router request: %#v", streamUUID, platformRequest)
-
-	if platformRequest.Routing == nil {
-		platformRequest.Routing = &platform.Routing{}
-	}
-
-	if !platform.RouteToSchemeMatches(platformRequest, "microservice") {
-		logger.Printf("[server.Route] %s -  unsupported scheme provided: %s", streamUUID, platformRequest.Routing.RouteTo)
-		return err
-	}
-
-	platformRequest.Routing.RouteFrom = []*platform.Route{
-		&platform.Route{
-			Uri: platform.String("client://" + streamUUID),
-		},
-	}
-
-	requestUuidPrefix := streamUUID + "::"
-
-	platformRequest.Uuid = platform.String(requestUuidPrefix + platformRequest.GetUuid())
-
-	responses, timeout := s.router.Route(platformRequest)
-
 	for {
-		select {
-		case response := <-responses:
-			responseJSON, _ := json.Marshal(response)
-			logger.Printf("[server.Route] %s - got a response for request: %s", streamUUID, responseJSON)
+		routerRequest, err := routeServer.Recv()
+		if err != nil {
+			logger.Printf("[server.Route] %s - stream has been disconnected", streamUUID)
 
-			response.Uuid = platform.String(strings.Replace(response.GetUuid(), requestUuidPrefix, "", -1))
-
-			// Strip off the tail for routing
-			response.Routing.RouteTo = response.Routing.RouteTo[:len(response.Routing.RouteTo)-1]
-
-			payloadBytes, err := platform.Marshal(response)
-			if err != nil {
-				logger.Printf("[server.Route] %s - failed to marshal platform response: %s", streamUUID, err)
-				return err
-			}
-
-			logger.Printf("[server.Route] %s - sending!", streamUUID)
-
-			if err := routeServer.Send(&pb.Request{Payload: payloadBytes}); err != nil {
-				logger.Printf("[server.Route] %s - failed to send platform response: %s", streamUUID, err)
-				return err
-			}
-
-			logger.Printf("[server.Route] %s - sent!", streamUUID)
-
-			if response.GetCompleted() {
-				logger.Printf("[server.Route] %s - got final response, closing down!", streamUUID)
+			if err == io.EOF {
 				return nil
 			}
 
-		case <-timeout:
-			logger.Printf("[server.Route] %s - got a timeout for request: %s", streamUUID, platformRequest.GetUuid())
-			return nil
+			return err
+		}
 
+		platformRequest := &platform.Request{}
+		if err := platform.Unmarshal(routerRequest.Payload, platformRequest); err != nil {
+			logger.Printf("[server.Route] %s -  failed to unmarshal platform request: %s", streamUUID, err)
+			return err
+		}
+
+		logger.Printf("[server.Route] %s - got router request: %#v", streamUUID, platformRequest)
+
+		if platformRequest.Routing == nil {
+			platformRequest.Routing = &platform.Routing{}
+		}
+
+		if !platform.RouteToSchemeMatches(platformRequest, "microservice") {
+			logger.Printf("[server.Route] %s -  unsupported scheme provided: %s", streamUUID, platformRequest.Routing.RouteTo)
+			return err
+		}
+
+		platformRequest.Routing.RouteFrom = []*platform.Route{
+			&platform.Route{
+				Uri: platform.String("client://" + streamUUID),
+			},
+		}
+
+		requestUuidPrefix := streamUUID + "::"
+
+		platformRequest.Uuid = platform.String(requestUuidPrefix + platformRequest.GetUuid())
+
+		responses, timeout := s.router.Route(platformRequest)
+
+		loopResponses := true
+
+		for loopResponses {
+			select {
+			case response := <-responses:
+				responseJSON, _ := json.Marshal(response)
+				logger.Printf("[server.Route] %s - got a response for request: %s", streamUUID, responseJSON)
+
+				response.Uuid = platform.String(strings.Replace(response.GetUuid(), requestUuidPrefix, "", -1))
+
+				// Strip off the tail for routing
+				response.Routing.RouteTo = response.Routing.RouteTo[:len(response.Routing.RouteTo)-1]
+
+				payloadBytes, err := platform.Marshal(response)
+				if err != nil {
+					logger.Printf("[server.Route] %s - failed to marshal platform response: %s", streamUUID, err)
+					continue
+				}
+
+				logger.Printf("[server.Route] %s - sending!", streamUUID)
+
+				if err := routeServer.Send(&pb.Request{Payload: payloadBytes}); err != nil {
+					logger.Printf("[server.Route] %s - failed to send platform response: %s", streamUUID, err)
+					return err
+				}
+
+				logger.Printf("[server.Route] %s - sent!", streamUUID)
+
+				if response.GetCompleted() {
+					logger.Printf("[server.Route] %s - got final response, closing down!", streamUUID)
+
+					loopResponses = false
+				}
+
+			case <-timeout:
+				logger.Printf("[server.Route] %s - got a timeout for request: %s", streamUUID, platformRequest.GetUuid())
+
+				loopResponses = false
+
+			}
 		}
 	}
 
