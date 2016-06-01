@@ -2,11 +2,12 @@ package main
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
+	"net"
 	"net/http"
+	"syscall"
 
-	"github.com/codegangsta/negroni"
+	"github.com/bmoyles0117/go-drain"
 	"github.com/microplatform-io/platform"
 )
 
@@ -17,8 +18,30 @@ func ListenForHttpServer(router platform.Router, mux *http.ServeMux) error {
 		}
 	}()
 
-	n := negroni.Classic()
-	n.Use(negroni.HandlerFunc(func(w http.ResponseWriter, r *http.Request, next http.HandlerFunc) {
+	lis, err := net.Listen("tcp", ":"+HTTP_PORT)
+	if err != nil {
+		return err
+	}
+
+	drainListener, err := drain.Listen(lis)
+	if err != nil {
+		return err
+	}
+
+	drainListener.ShutdownWhenSignalsNotified(syscall.SIGHUP, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
+
+	return http.Serve(drainListener, mux)
+}
+
+func CreateServeMux(serverConfig *ServerConfig) *http.ServeMux {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/server", serverHandler(serverConfig))
+	mux.HandleFunc("/", serverHandler(serverConfig))
+	return mux
+}
+
+func serverHandler(serverConfig *ServerConfig) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
 		if origin := r.Header.Get("Origin"); origin != "" {
 			w.Header().Add("Access-Control-Allow-Origin", origin)
 		} else {
@@ -30,25 +53,7 @@ func ListenForHttpServer(router platform.Router, mux *http.ServeMux) error {
 		w.Header().Add("Access-Control-Allow-Credentials", "true")
 		w.Header().Add("Connection", "keep-alive")
 
-		next(w, r)
-	}))
-	n.UseHandler(mux)
-
-	n.Run(":" + HTTP_PORT)
-
-	return errors.New("server unexpected died")
-}
-
-func CreateServeMux(serverConfig *ServerConfig) *http.ServeMux {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/server", serverHandler(serverConfig))
-	mux.HandleFunc("/", serverHandler(serverConfig))
-	return mux
-}
-
-func serverHandler(serverConfig *ServerConfig) func(w http.ResponseWriter, req *http.Request) {
-	return func(w http.ResponseWriter, req *http.Request) {
-		cb := req.FormValue("callback")
+		cb := r.FormValue("callback")
 
 		jsonBytes, _ := json.Marshal(serverConfig)
 		if cb == "" {

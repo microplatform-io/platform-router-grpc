@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/microplatform-io/platform"
@@ -62,16 +63,18 @@ func main() {
 		Port:     GRPC_PORT, // we just use this here because this is where it reports it
 	}
 
-	go func() {
-		logger.Fatalf("grpc server died: %s", ListenForGrpcServer(router, grpcServerConfig))
-	}()
+	wg := sync.WaitGroup{}
+	wg.Add(1)
 
 	go func() {
-		logger.Fatalf("http server died: %s", ListenForHttpServer(router, CreateServeMux(grpcServerConfig)))
+		logger.Println("grpc server died: %s", ListenForGrpcServer(router, grpcServerConfig))
+
+		wg.Done()
 	}()
 
-	// Block indefinitely
-	<-make(chan bool)
+	logger.Printf("http server died: %s", ListenForHttpServer(router, CreateServeMux(grpcServerConfig)))
+
+	wg.Wait()
 }
 
 func formatHostAddress(ip string) string {
