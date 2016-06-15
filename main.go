@@ -15,10 +15,11 @@ var (
 	rabbitmqEndpoints = strings.Split(os.Getenv("RABBITMQ_ENDPOINTS"), ",")
 	logger            = platform.GetLogger("platform-router-grpc")
 
-	GRPC_PORT = platform.Getenv("GRPC_PORT", "4772")
-	HTTP_PORT = platform.Getenv("HTTP_PORT", "4773")
-	SSL_CERT  = platform.Getenv("SSL_CERT", "")
-	SSL_KEY   = platform.Getenv("SSL_KEY", "")
+	GRPC_PORT   = platform.Getenv("GRPC_PORT", "4772")
+	HTTP_PORT   = platform.Getenv("HTTP_PORT", "4773")
+	EXTERNAL_IP = platform.Getenv("EXTERNAL_IP", "") // In kubernetes, we need to return the service's external IP
+	SSL_CERT    = platform.Getenv("SSL_CERT", "")
+	SSL_KEY     = platform.Getenv("SSL_KEY", "")
 )
 
 type ServerConfig struct {
@@ -52,16 +53,23 @@ func main() {
 	router := platform.NewStandardRouter(publisher, subscriber)
 	router.SetHeartbeatTimeout(7 * time.Second)
 
-	ip, err := platform.GetMyIp()
-	if err != nil {
-		logger.Fatalf("> failed to get ip address: %s", err)
+	externalIP := EXTERNAL_IP
+	if externalIP == "" {
+		logger.Println("An external IP address was not provided, fetching one now")
+
+		discoveredIP, err := platform.GetMyIp()
+		if err != nil {
+			logger.Fatal(err)
+		}
+
+		externalIP = discoveredIP
 	}
 
-	logger.Println("We got our IP it is : ", ip)
+	logger.Printf("This router's IP will be known as: %s", externalIP)
 
 	grpcServerConfig := &ServerConfig{
 		Protocol: "https",
-		Host:     formatHostAddress(ip),
+		Host:     formatHostAddress(externalIP),
 		Port:     GRPC_PORT, // we just use this here because this is where it reports it
 	}
 
