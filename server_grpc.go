@@ -3,14 +3,15 @@ package main
 import (
 	"encoding/json"
 	"io"
+	"io/ioutil"
 	"net"
+	"os"
 	"strings"
-	"syscall"
 
-	"github.com/bmoyles0117/go-drain"
 	"github.com/microplatform-io/platform"
 	pb "github.com/microplatform-io/platform-grpc"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 )
 
 func ListenForGrpcServer(router platform.Router, grpcServerConfig *ServerConfig) error {
@@ -25,37 +26,52 @@ func ListenForGrpcServer(router platform.Router, grpcServerConfig *ServerConfig)
 		logger.Fatalf("failed to listen: %v", err)
 	}
 
-	drainListener, err := drain.Listen(lis)
-	if err != nil {
-		logger.Fatalf("failed to listen: %v", err)
+	var opts []grpc.ServerOption
+
+	if SSL_CERT != "" && SSL_KEY != "" {
+		certFile, err := ioutil.TempFile("", "cert")
+		if err != nil {
+			logger.Fatalf("failed to write cert file: %s", err)
+		}
+		defer certFile.Close()
+
+		keyFile, err := ioutil.TempFile("", "key")
+		if err != nil {
+			logger.Fatalf("failed to write key file: %s", err)
+		}
+		defer keyFile.Chdir()
+
+		ioutil.WriteFile(certFile.Name(), []byte(strings.Replace(SSL_CERT, "\\n", "\n", -1)), os.ModeTemporary)
+		ioutil.WriteFile(keyFile.Name(), []byte(strings.Replace(SSL_KEY, "\\n", "\n", -1)), os.ModeTemporary)
+
+		creds, err := credentials.NewServerTLSFromFile(certFile.Name(), keyFile.Name())
+		if err != nil {
+			return err
+		}
+
+		opts = []grpc.ServerOption{grpc.Creds(creds)}
 	}
 
-	drainListener.ShutdownWhenSignalsNotified(syscall.SIGHUP, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
-
-	s := grpc.NewServer()
-	pb.RegisterRouterServer(s, newServer(router, drainListener))
-	return s.Serve(drainListener)
+	grpcServer := grpc.NewServer(opts...)
+	pb.RegisterRouterServer(grpcServer, newServer(router))
+	return grpcServer.Serve(lis)
 }
 
 type server struct {
-	drainListener *drain.Listener
-	router        platform.Router
+	router platform.Router
 }
 
-func (s *server) Route(routeServer pb.Router_RouteServer) error {
+func (s *server) Route(stream pb.Router_RouteServer) error {
 	streamUUID := "stream-" + platform.CreateUUID()
 
-	shutdownNotifier := s.drainListener.NotifyShutdown()
-	defer shutdownNotifier.Shutdown()
-
 	for {
-		routerRequest, err := routeServer.Recv()
+		routerRequest, err := stream.Recv()
 		if err != nil {
-			logger.Printf("[server.Route] %s - stream has been disconnected", streamUUID)
-
 			if err == io.EOF {
 				return nil
 			}
+
+			logger.Printf("[server.Route] %s - stream has been disconnected: %s", streamUUID, err)
 
 			return err
 		}
@@ -83,9 +99,9 @@ func (s *server) Route(routeServer pb.Router_RouteServer) error {
 			},
 		}
 
-		requestUuidPrefix := streamUUID + "::"
+		requestUUIDPrefix := streamUUID + "::"
 
-		platformRequest.Uuid = platform.String(requestUuidPrefix + platformRequest.GetUuid())
+		platformRequest.Uuid = platform.String(requestUUIDPrefix + platformRequest.GetUuid())
 
 		responses, timeout := s.router.Route(platformRequest)
 
@@ -97,7 +113,7 @@ func (s *server) Route(routeServer pb.Router_RouteServer) error {
 				responseJSON, _ := json.Marshal(response)
 				logger.Printf("[server.Route] %s - got a response for request: %s", streamUUID, responseJSON)
 
-				response.Uuid = platform.String(strings.Replace(response.GetUuid(), requestUuidPrefix, "", -1))
+				response.Uuid = platform.String(strings.Replace(response.GetUuid(), requestUUIDPrefix, "", -1))
 
 				// Strip off the tail for routing
 				response.Routing.RouteTo = response.Routing.RouteTo[:len(response.Routing.RouteTo)-1]
@@ -110,7 +126,7 @@ func (s *server) Route(routeServer pb.Router_RouteServer) error {
 
 				logger.Printf("[server.Route] %s - sending!", streamUUID)
 
-				if err := routeServer.Send(&pb.Request{Payload: payloadBytes}); err != nil {
+				if err := stream.Send(&pb.Request{Payload: payloadBytes}); err != nil {
 					logger.Printf("[server.Route] %s - failed to send platform response: %s", streamUUID, err)
 					return err
 				}
@@ -135,11 +151,8 @@ func (s *server) Route(routeServer pb.Router_RouteServer) error {
 	return nil
 }
 
-func newServer(router platform.Router, drainListener *drain.Listener) *server {
-	server := &server{
-		router:        router,
-		drainListener: drainListener,
+func newServer(router platform.Router) *server {
+	return &server{
+		router: router,
 	}
-
-	return server
 }

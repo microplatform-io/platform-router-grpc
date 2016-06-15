@@ -1,36 +1,56 @@
 package main
 
 import (
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
-	"net"
+	"io/ioutil"
 	"net/http"
-	"syscall"
+	"os"
+	"strings"
 
-	"github.com/bmoyles0117/go-drain"
 	"github.com/microplatform-io/platform"
 )
 
 func ListenForHttpServer(router platform.Router, mux *http.ServeMux) error {
-	defer func() {
-		if r := recover(); r != nil {
-			logger.Println("> http server has died: %s", r)
+	if SSL_CERT != "" && SSL_KEY != "" {
+		certFile, err := ioutil.TempFile("", "cert")
+		if err != nil {
+			logger.Fatalf("failed to write cert file: %s", err)
 		}
-	}()
+		defer certFile.Close()
 
-	lis, err := net.Listen("tcp", ":"+HTTP_PORT)
-	if err != nil {
-		return err
+		keyFile, err := ioutil.TempFile("", "key")
+		if err != nil {
+			logger.Fatalf("failed to write key file: %s", err)
+		}
+		defer keyFile.Chdir()
+
+		ioutil.WriteFile(certFile.Name(), []byte(strings.Replace(SSL_CERT, "\\n", "\n", -1)), os.ModeTemporary)
+		ioutil.WriteFile(keyFile.Name(), []byte(strings.Replace(SSL_KEY, "\\n", "\n", -1)), os.ModeTemporary)
+
+		cfg := &tls.Config{
+			MinVersion:               tls.VersionTLS12,
+			CurvePreferences:         []tls.CurveID{tls.CurveP521, tls.CurveP384, tls.CurveP256},
+			PreferServerCipherSuites: true,
+			CipherSuites: []uint16{
+				tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+				tls.TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA,
+				tls.TLS_RSA_WITH_AES_256_GCM_SHA384,
+				tls.TLS_RSA_WITH_AES_256_CBC_SHA,
+			},
+		}
+		srv := &http.Server{
+			Addr:         ":" + HTTP_PORT,
+			Handler:      mux,
+			TLSConfig:    cfg,
+			TLSNextProto: make(map[string]func(*http.Server, *tls.Conn, http.Handler), 0),
+		}
+
+		return srv.ListenAndServeTLS(certFile.Name(), keyFile.Name())
+	} else {
+		return http.ListenAndServe(":"+HTTP_PORT, mux)
 	}
-
-	drainListener, err := drain.Listen(lis)
-	if err != nil {
-		return err
-	}
-
-	drainListener.ShutdownWhenSignalsNotified(syscall.SIGHUP, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
-
-	return http.Serve(drainListener, mux)
 }
 
 func CreateServeMux(serverConfig *ServerConfig) *http.ServeMux {

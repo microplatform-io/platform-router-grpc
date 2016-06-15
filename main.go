@@ -17,6 +17,8 @@ var (
 
 	GRPC_PORT = platform.Getenv("GRPC_PORT", "4772")
 	HTTP_PORT = platform.Getenv("HTTP_PORT", "4773")
+	SSL_CERT  = platform.Getenv("SSL_CERT", "")
+	SSL_KEY   = platform.Getenv("SSL_KEY", "")
 )
 
 type ServerConfig struct {
